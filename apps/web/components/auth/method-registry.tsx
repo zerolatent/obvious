@@ -2,6 +2,7 @@ import type { ProviderId } from "@app/auth"
 import type { ComponentType } from "react"
 
 import { EmailPasswordMethod } from "./email-password-method"
+import { AppleMethod, GoogleMethod } from "./social-method"
 
 export type AuthMode = "login" | "signup"
 
@@ -11,17 +12,19 @@ export interface AuthMethodProps {
 
 /**
  * The pluggable seam on the client: every provider id the server can enable
- * maps here to the component that renders it. A later task adds "google",
- * "apple", or "passkey" by adding an entry — the page shell, the fetch, and
- * the render loop below never change shape.
+ * maps here to the component that renders it. A later task adds "passkey" by
+ * adding an entry — the page shell, the fetch, and the render loop below
+ * never change shape.
  *
  * A provider that is enabled server-side but has no entry here (true for
- * every method except email/password, until those tasks land) simply
- * contributes nothing: that is the intended forward-compatible state, not an
- * error.
+ * every method except email/password, google, and apple, until that task
+ * lands) simply contributes nothing: that is the intended forward-compatible
+ * state, not an error.
  */
 const METHOD_COMPONENTS: Partial<Record<ProviderId, ComponentType<AuthMethodProps>>> = {
   "email-password": EmailPasswordMethod,
+  google: GoogleMethod,
+  apple: AppleMethod,
 }
 
 /** The enabled methods this build actually has UI for, in server order. */
