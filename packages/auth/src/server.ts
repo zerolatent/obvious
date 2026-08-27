@@ -61,7 +61,10 @@ export function socialProvidersFor(
       apple: {
         clientId: requireEnv(env, "APPLE_CLIENT_ID", "apple"),
         clientSecret: requireEnv(env, "APPLE_CLIENT_SECRET", "apple"),
-        appBundleIdentifier: env.APPLE_BUNDLE_ID,
+        // Required, not optional: Apple's id token audience falls back to
+        // this value, so an unset bundle id silently breaks the native
+        // sign-in verification path instead of failing at boot.
+        appBundleIdentifier: requireEnv(env, "APPLE_BUNDLE_ID", "apple"),
       },
     }),
   }

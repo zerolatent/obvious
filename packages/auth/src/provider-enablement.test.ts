@@ -17,6 +17,7 @@ const CREDENTIALS: AuthEnv = {
   GOOGLE_CLIENT_SECRET: "google-client-secret",
   APPLE_CLIENT_ID: "apple-client-id",
   APPLE_CLIENT_SECRET: "apple-client-secret",
+  APPLE_BUNDLE_ID: "com.example.app",
 }
 
 /** Every passkey route the plugin contributes when it is mounted. */
@@ -157,6 +158,20 @@ describe("createAuth", () => {
         database: memoryAdapter({ user: [], session: [], account: [], verification: [], passkey: [] }),
       }),
     ).toThrowError(/GOOGLE_CLIENT_ID/)
+  })
+
+  it("refuses to boot when apple is enabled but APPLE_BUNDLE_ID is missing", () => {
+    expect(() =>
+      createAuth({
+        env: {
+          AUTH_PROVIDERS: "apple",
+          BETTER_AUTH_SECRET: CREDENTIALS.BETTER_AUTH_SECRET,
+          APPLE_CLIENT_ID: CREDENTIALS.APPLE_CLIENT_ID,
+          APPLE_CLIENT_SECRET: CREDENTIALS.APPLE_CLIENT_SECRET,
+        },
+        database: memoryAdapter({ user: [], session: [], account: [], verification: [], passkey: [] }),
+      }),
+    ).toThrowError(/APPLE_BUNDLE_ID/)
   })
 
   it("defaults to email-password when AUTH_PROVIDERS is unset", () => {
