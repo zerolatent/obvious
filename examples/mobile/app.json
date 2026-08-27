@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "Obvious Auth Example",
+    "slug": "obvious-auth-example",
+    "scheme": "obvious-auth-example",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ai.obvious.authexample"
+    },
+    "android": {
+      "package": "ai.obvious.authexample"
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

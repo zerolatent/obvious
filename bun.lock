@@ -64,6 +64,58 @@
         "vitest": "^2.0.5",
       },
     },
+    "examples/api": {
+      "name": "@example/api",
+      "version": "0.1.0",
+      "dependencies": {
+        "@app/auth": "workspace:*",
+        "better-auth": "^1.7.2",
+      },
+      "devDependencies": {
+        "@types/node": "^20.14.15",
+        "tsx": "^4.19.2",
+        "typescript": "^5.5.4",
+      },
+    },
+    "examples/mobile": {
+      "name": "@example/mobile",
+      "version": "0.1.0",
+      "dependencies": {
+        "@app/auth": "workspace:*",
+        "@better-auth/expo": "^1.7.2",
+        "better-auth": "^1.7.2",
+        "expo": "^51.0.28",
+        "expo-asset": "~10.0.10",
+        "expo-linking": "~6.3.1",
+        "expo-local-authentication": "~14.0.1",
+        "expo-secure-store": "~13.0.2",
+        "expo-status-bar": "^1.12.1",
+        "expo-web-browser": "~13.0.3",
+        "react": "18.2.0",
+        "react-native": "0.74.5",
+      },
+      "devDependencies": {
+        "@types/node": "^20.14.15",
+        "@types/react": "^18.3.5",
+        "typescript": "^5.5.4",
+      },
+    },
+    "examples/web": {
+      "name": "@example/web",
+      "version": "0.1.0",
+      "dependencies": {
+        "@app/auth": "workspace:*",
+        "next": "^14.2.15",
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1",
+      },
+      "devDependencies": {
+        "@types/node": "^20.14.15",
+        "@types/react": "^18.3.5",
+        "@types/react-dom": "^18.3.0",
+        "typescript": "^5.5.4",
+      },
+    },
     "packages/auth": {
       "name": "@app/auth",
       "version": "0.1.0",
@@ -477,6 +529,12 @@
     "@eslint/object-schema": ["@eslint/object-schema@2.1.7", "", {}, "sha512-VtAOaymWVfZcmZbp6E2mympDIHvyjXs/12LqWYjVw6qjrfF+VK+fyG33kChz3nnK+SU5/NeHOqrTEHS8sXO3OA=="],
 
     "@eslint/plugin-kit": ["@eslint/plugin-kit@0.4.1", "", { "dependencies": { "@eslint/core": "^0.17.0", "levn": "^0.4.1" } }, "sha512-43/qtrDUokr7LJqoF2c3+RInu/t4zfrpYdoSDfYyhg52rwLV6TnOvdG4fXm7IkSB3wErkcmJS9iEhjVtOSEjjA=="],
+
+    "@example/api": ["@example/api@workspace:examples/api"],
+
+    "@example/mobile": ["@example/mobile@workspace:examples/mobile"],
+
+    "@example/web": ["@example/web@workspace:examples/web"],
 
     "@expo/bunyan": ["@expo/bunyan@4.0.1", "", { "dependencies": { "uuid": "^8.0.0" } }, "sha512-+Lla7nYSiHZirgK+U/uYzsLv/X+HaJienbD5AKX1UQZHYfWaP+9uuQluRB4GrEVWF0GZ7vEVp/jzaOT9k/SQlg=="],
 
@@ -2425,6 +2483,10 @@
     "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
 
     "@eslint/eslintrc/globals": ["globals@14.0.0", "", {}, "sha512-oahGvuMGQlPw/ivIYBjVSrWAfWLBeku5tpPE2fOPLi+WHffIWbuh2tCjhyQhTBPMf5E9jDEH4FOmTYgYwbKwtQ=="],
+
+    "@example/mobile/expo-web-browser": ["expo-web-browser@13.0.3", "", { "peerDependencies": { "expo": "*" } }, "sha512-HXb7y82ApVJtqk8tManyudtTrCtx8xcUnVzmJECeHCB0SsWSQ+penVLZxJkcyATWoJOsFMnfVSVdrTcpKKGszQ=="],
+
+    "@example/mobile/react": ["react@18.2.0", "", { "dependencies": { "loose-envify": "^1.1.0" } }, "sha512-/3IjMdb2L9QbBdWiW5e3P2/npwMBaU9mHCSCUzNln0ZCYbcfTsGbTJrU/kGemdH2IWmB2ioZ+zkxtmq6g09fGQ=="],
 
     "@expo/cli/form-data": ["form-data@3.0.5", "", { "dependencies": { "asynckit": "^0.4.0", "combined-stream": "^1.0.8", "es-set-tostringtag": "^2.1.0", "hasown": "^2.0.4", "mime-types": "^2.1.35" } }, "sha512-j23EibVLnp4zNXGW7LjryXYa2X6U/M96yoOX+ybZxwkYajdxRNEqYY3zhh7y0i6kfISKS2jr+EJq1YTUDEv5+w=="],
 
