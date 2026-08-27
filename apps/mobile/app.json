@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "Obvious Auth",
+    "slug": "obvious-auth",
+    "scheme": "obvious-auth",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ai.obvious.auth"
+    },
+    "android": {
+      "package": "ai.obvious.auth"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": ["expo-router"]
+  }
+}
