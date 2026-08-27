@@ -70,6 +70,44 @@ export function socialProvidersFor(
   }
 }
 
+/**
+ * The account-linking policy, chosen explicitly rather than left to Better
+ * Auth's defaults.
+ *
+ * The spec requires a Google login and an Apple login on the same verified
+ * email to resolve to ONE user — never a silent duplicate. Verified,
+ * reviewing Better Auth 1.7's callback handler (`handleOAuthUserInfo`):
+ * signing in with a *new* provider against an email that already has an
+ * account auto-links the two the moment the incoming profile reports
+ * `emailVerified: true` — trust in the provider name is only a fallback for
+ * providers that do NOT self-verify email ownership. Google and Apple both
+ * do (the verified email comes from a token the provider itself issued), so
+ * that path already produces one user with no extra configuration.
+ *
+ * `trustedProviders` is set anyway so the trust decision is a line of code a
+ * reviewer can see, not an inference from `emailVerified` behavior buried in
+ * a dependency; it also governs the explicit `linkSocial()` API, which does
+ * consult it directly. `enabled` is likewise pinned to `true` — the default —
+ * so a future Better Auth version cannot flip auto-linking off underneath
+ * this deployment without the diff showing up here first.
+ *
+ * `requireLocalEmailVerified` (the other half of the guarantee — the
+ * *existing* local account must itself be verified before a new provider can
+ * attach to it, closing the takeover where an attacker pre-registers an
+ * unverified account at a victim's email) is intentionally left unset: it
+ * already defaults to `true` and Better Auth has deprecated it toward
+ * becoming unconditional, so pinning it here would just be a flag to remember
+ * to delete later.
+ */
+export function accountLinkingConfig(): NonNullable<BetterAuthOptions["account"]> {
+  return {
+    accountLinking: {
+      enabled: true,
+      trustedProviders: ["google", "apple"],
+    },
+  }
+}
+
 /** The plugin list for the enabled set. `bearer` is unconditional. */
 export function pluginsFor(
   registry: ProviderRegistry,
@@ -102,6 +140,7 @@ export function createAuth(options: CreateAuthOptions = {}) {
       enabled: registry.has("email-password"),
     },
     socialProviders: socialProvidersFor(registry, env),
+    account: accountLinkingConfig(),
     plugins: pluginsFor(registry, options.plugins),
   })
 
