@@ -58,6 +58,10 @@ Copy `.env.example` to `.env` and fill in what your enabled providers need.
 | `AUTH_REQUIRE_EMAIL_VERIFICATION` | Optional (defaults to `false`) | `packages/auth/src/config.ts` (`parseRequireEmailVerification`) — when true, an account with an unproven email address cannot be issued a session. Accepts `1/true/yes/on` and `0/false/no/off`; anything else throws at boot |
 | `MOBILE_APP_SCHEME` | Optional (defaults to `obvious-auth`, matching `apps/mobile/app.json`'s `expo.scheme`) | `packages/auth/src/server.ts` (`mobileTrustedOrigins`) — trusts the mobile app's deep-link scheme as an OAuth callback origin |
 | `EXPO_PUBLIC_AUTH_BASE_URL` | Optional, mobile only (defaults to `http://localhost:3000`) | `apps/mobile/src/auth/config.ts` — where the mobile client points |
+| `AUTH_LOG_LEVEL` | Optional (defaults to `warn`) | `packages/auth/src/logging.ts` — verbosity of the default console logger |
+| `AUTH_RATE_LIMIT_ENABLED` | Optional (defaults to `true`, except `NODE_ENV=test` where it defaults to `false`) | `packages/auth/src/rate-limit.ts` |
+| `AUTH_RATE_LIMIT_WINDOW_SECONDS` | Optional (defaults to `60`) | `packages/auth/src/rate-limit.ts` |
+| `AUTH_RATE_LIMIT_MAX` | Optional (defaults to `10`) | `packages/auth/src/rate-limit.ts` |
 
 `GOOGLE_CLIENT_ID`/`SECRET` and `APPLE_CLIENT_ID`/`SECRET`/`APPLE_BUNDLE_ID`
 are enforced at boot: enabling `google` or `apple` in `AUTH_PROVIDERS`
@@ -146,6 +150,45 @@ Turning this on is a breaking change for a deployment that already has
 unverified users — they are all locked out until they click a link — so it is
 an explicit opt-in, never a default.
 
+## Rate limiting & structured logging
+
+### Rate limiting
+
+Better Auth's built-in rate limiter is on by default (off under
+`NODE_ENV=test`, so the suite's repeated sign-in/sign-up calls don't trip a
+429 incidentally — a suite that wants to exercise the limiter sets
+`AUTH_RATE_LIMIT_ENABLED=true` explicitly, as `rate-limit.test.ts` does).
+`AUTH_RATE_LIMIT_WINDOW_SECONDS` / `AUTH_RATE_LIMIT_MAX` set the global
+window and request budget (default: 60s / 10 requests). `/sign-in/email` and
+`/sign-up/email` get a stricter derived rule (half the global max, same
+window); `/request-password-reset` and `/reset-password` get a stricter rule
+still (a quarter of the global max, over a 5x longer window) since those are
+the endpoints most worth protecting from credential-guessing and
+reset-email bombing. Tightening `AUTH_RATE_LIMIT_MAX` tightens all of these
+together — see `packages/auth/src/rate-limit.ts` for the exact ratios.
+
+### Structured logging
+
+`createAuth({ logger })` accepts a minimal `debug`/`info`/`warn`/`error`
+interface (`packages/auth/src/logging.ts`); the default implementation is a
+leveled console logger gated by `AUTH_LOG_LEVEL` (default `warn`, so
+production stays quiet until something actually fails). `createAuth` wires it
+to provider boot/validation failures (an enabled provider missing its
+credentials), rate-limit hits, rejected OAuth callbacks (denied consent,
+missing/invalid state, account-linking conflicts), and password-reset/email-
+verification dispatch (below). Every call site passes only structured,
+non-sensitive metadata — user ids, sanitized path labels
+(a reset-password token in a path is replaced with `:token`), provider ids,
+error codes — and deliberately never a password, token, secret, email
+address, or full request/response body, so a real log pipeline can consume
+`meta` as-is without becoming a second place credentials leak from.
+
+`packages/auth/src/email-dispatch.ts` additionally exports
+`wrapEmailDispatch`, which wraps the `sendResetPassword` and
+`sendVerificationEmail` callbacks above (info on dispatch, warn-and-rethrow on
+failure) with the same non-sensitive-metadata rule: only the user id is
+logged, never the address, the link, or the token it carries.
+
 ## Running web + mobile against the server
 
 The Better Auth server lives inside the Next.js app at
@@ -205,6 +248,20 @@ packages/auth/src/*.test.ts        config.test.ts           — AUTH_PROVIDERS p
                                                                 mailer
                                     schema-parity.test.ts     — Drizzle schema matches what
                                                                 Better Auth expects
+                                    logging.test.ts           — AUTH_LOG_LEVEL parsing and the
+                                                                default console logger's level
+                                                                gating
+                                    rate-limit.test.ts        — AUTH_RATE_LIMIT_* parsing, the
+                                                                per-path rule derivation, and a
+                                                                real 429 after the threshold trips
+                                                                on /sign-in/email
+                                    request-events.test.ts    — the response-boundary wrapper logs
+                                                                a warn on a rate-limit hit and on a
+                                                                rejected OAuth callback
+                                    email-dispatch.test.ts    — wrapEmailDispatch logs info on
+                                                                dispatch and warn-and-rethrows on a
+                                                                failed send, without ever logging
+                                                                the address, link, or token
 
 apps/web/**/*.test.ts(x)           Component tests (method-registry, social buttons, panels)
                                     plus three integration suites that run requests through the
@@ -223,8 +280,8 @@ apps/mobile/src/**/*.test.ts       Unit tests for the biometric gate (no-hardwar
                                     auth-methods parsing, deep-link scheme resolution
 ```
 
-Run everything with `bun run test` (Vitest workspaces, one process, 21 files /
-200 tests as of this writing — 3 of them skip cleanly without a reachable
+Run everything with `bun run test` (Vitest workspaces, one process, 25 files /
+238 tests as of this writing — 3 of them skip cleanly without a reachable
 `DATABASE_URL`). Run a single workspace with
 `bun run --filter <name> test` or `cd` into it and run `vitest` directly.
 
