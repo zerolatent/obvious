@@ -1,3 +1,4 @@
+import type { CBORType } from "@levischuck/tiny-cbor"
 import { cose, isoBase64URL, isoCBOR } from "@simplewebauthn/server/helpers"
 import { createHash, generateKeyPairSync, sign as signWithKey, type KeyObject } from "node:crypto"
 
@@ -67,8 +68,12 @@ function buildClientDataJSON(options: { type: "webauthn.create" | "webauthn.get"
   )
 }
 
-function toBytes(value: ArrayBuffer | ArrayBufferView): Uint8Array {
-  return value instanceof Uint8Array ? value : new Uint8Array("buffer" in value ? value.buffer : value)
+function toBytes(value: ArrayBuffer | ArrayBufferView): Uint8Array<ArrayBuffer> {
+  // Always copy into a freshly allocated ArrayBuffer-backed view: the input
+  // may be a Uint8Array over a SharedArrayBuffer or another typed array's
+  // buffer, neither of which the CBOR/base64 helpers below accept.
+  const view = value instanceof Uint8Array ? value : new Uint8Array("buffer" in value ? value.buffer : value)
+  return new Uint8Array(view)
 }
 
 /**
@@ -198,7 +203,7 @@ export class VirtualAuthenticator {
     })
 
     const attestationObject = isoCBOR.encode(
-      new Map<string, unknown>([
+      new Map<string, CBORType>([
         ["fmt", "none"],
         ["attStmt", new Map()],
         ["authData", authenticatorData],
@@ -255,8 +260,8 @@ export class VirtualAuthenticator {
       ?.map((descriptor) => isoBase64URL.fromBuffer(toBytes(descriptor.id)))
       .filter((id) => this.credentials.has(id))
 
-    if (allowList && allowList.length > 0) {
-      const id = allowList[0]
+    const [id] = allowList ?? []
+    if (id !== undefined) {
       const credential = this.credentials.get(id)
       return credential ? [id, credential] : undefined
     }
