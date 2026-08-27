@@ -22,6 +22,7 @@ const { auth } = createAuth({
     GOOGLE_CLIENT_SECRET: "secret",
     APPLE_CLIENT_ID: "id",
     APPLE_CLIENT_SECRET: "secret",
+    APPLE_BUNDLE_ID: "com.example.app",
   },
   database: memoryAdapter({ user: [], session: [], account: [], verification: [], passkey: [] }),
 })

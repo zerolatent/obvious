@@ -23,6 +23,7 @@ async function loadRoutes(providers: string) {
     GOOGLE_CLIENT_SECRET: "google-client-secret",
     APPLE_CLIENT_ID: "apple-client-id",
     APPLE_CLIENT_SECRET: "apple-client-secret",
+    APPLE_BUNDLE_ID: "com.example.app",
   })
 
   const methods = await import("./route")

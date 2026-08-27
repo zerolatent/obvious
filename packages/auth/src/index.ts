@@ -10,6 +10,7 @@ export {
 } from "./config"
 
 export {
+  accountLinkingConfig,
   createAuth,
   mountedRoutes,
   pluginsFor,
