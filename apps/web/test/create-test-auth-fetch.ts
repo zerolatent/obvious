@@ -43,6 +43,11 @@ export function createTestAuthFetch(providers: string) {
 
     const headers = new Headers(init?.headers)
     if (cookie) headers.set("cookie", cookie)
+    // A real browser fetch always carries an Origin header (same-origin
+    // included); Better Auth's passkey endpoints read it to validate the
+    // WebAuthn ceremony's expected origin and 400 without one. This stub
+    // fetch has no browser underneath to add it, so it stands in for one.
+    if (!headers.has("origin")) headers.set("origin", "http://localhost:3000")
 
     const response = await auth.handler(
       new Request(url, {

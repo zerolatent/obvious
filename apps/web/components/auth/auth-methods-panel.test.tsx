@@ -2,6 +2,8 @@ import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { isPasskeySupported } from "../../lib/webauthn-support"
+
 import { AuthMethodsPanel } from "./auth-methods-panel"
 
 /** Stubs `fetch` for exactly the /api/auth-methods call this panel makes. */
@@ -37,9 +39,9 @@ describe("AuthMethodsPanel", () => {
   })
 
   it("renders no email/password form when the method is disabled", async () => {
-    // passkey has no client UI yet, so a methods response naming only it
-    // still renders the empty state — same case the email-password check
-    // above exercises, without relying on a provider that now has its own UI.
+    // jsdom has no PublicKeyCredential, so passkey is filtered by the
+    // capability gate even though it's enabled — the empty state this
+    // exercises is the same one an unsupported browser sees for real.
     stubMethodsFetch(() => Response.json({ methods: ["passkey"] }))
 
     render(<AuthMethodsPanel mode="login" />)
@@ -126,6 +128,50 @@ describe("AuthMethodsPanel social button visibility", () => {
     ).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /continue with google/i })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /continue with apple/i })).toBeInTheDocument()
+  })
+})
+
+describe("AuthMethodsPanel passkey visibility", () => {
+  it("renders the passkey button only when it's enabled AND this browser supports WebAuthn", async () => {
+    vi.stubGlobal(
+      "PublicKeyCredential",
+      class PublicKeyCredential {},
+    )
+    stubMethodsFetch(() => Response.json({ methods: ["email-password", "passkey"] }))
+
+    render(<AuthMethodsPanel mode="login" />)
+
+    expect(await screen.findByRole("button", { name: /log in with a passkey/i })).toBeInTheDocument()
+  })
+
+  it("hides the passkey button when the server enables it but this browser can't run WebAuthn", async () => {
+    // No PublicKeyCredential stub — isPasskeySupported() reflects the
+    // sandboxed jsdom default, so this asserts against the real gate
+    // rather than assuming jsdom's shape.
+    expect(isPasskeySupported()).toBe(false)
+    stubMethodsFetch(() => Response.json({ methods: ["email-password", "passkey"] }))
+
+    render(<AuthMethodsPanel mode="login" />)
+
+    await screen.findByRole("form", { name: /log in with email and password/i })
+    expect(
+      screen.queryByRole("button", { name: /log in with a passkey/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("hides the passkey button when the browser supports WebAuthn but the server doesn't enable it", async () => {
+    vi.stubGlobal(
+      "PublicKeyCredential",
+      class PublicKeyCredential {},
+    )
+    stubMethodsFetch(() => Response.json({ methods: ["email-password"] }))
+
+    render(<AuthMethodsPanel mode="login" />)
+
+    await screen.findByRole("form", { name: /log in with email and password/i })
+    expect(
+      screen.queryByRole("button", { name: /log in with a passkey/i }),
+    ).not.toBeInTheDocument()
   })
 })
 
