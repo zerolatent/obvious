@@ -23,6 +23,9 @@ export function SessionStatus() {
   return (
     <div>
       <p>Signed in as {session.user.email}</p>
+      <p>
+        <a href="/account">Account settings</a>
+      </p>
       <button type="button" onClick={() => authClient.signOut()}>
         Log out
       </button>

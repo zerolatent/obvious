@@ -20,16 +20,46 @@ function buildTestAuth(providers: string) {
 }
 
 /**
+ * Applies a batch of `Set-Cookie` response headers onto a cookie jar keyed
+ * by cookie name, honoring deletions (`Max-Age=0` or an `Expires` in the
+ * past). A real browser's cookie store merges by name the same way — a
+ * response that sets one cookie never clears the others.
+ */
+function applySetCookies(jar: Map<string, string>, setCookie: string[]): void {
+  for (const entry of setCookie) {
+    const [pair = "", ...attributes] = entry.split(";")
+    const separatorIndex = pair.indexOf("=")
+    if (separatorIndex === -1) continue
+    const name = pair.slice(0, separatorIndex).trim()
+    const value = pair.slice(separatorIndex + 1).trim()
+
+    const trimmedAttributes = attributes.map((attr) => attr.trim())
+    const maxAge = trimmedAttributes.find((attr) => attr.toLowerCase().startsWith("max-age="))
+    const expires = trimmedAttributes.find((attr) => attr.toLowerCase().startsWith("expires="))
+    const isDeleted =
+      (maxAge !== undefined && Number(maxAge.slice("max-age=".length)) <= 0) ||
+      (expires !== undefined && new Date(expires.slice("expires=".length)).getTime() <= Date.now())
+
+    if (isDeleted) jar.delete(name)
+    else jar.set(name, value)
+  }
+}
+
+/**
  * A `fetch` replacement that stands in for the browser: it answers
  * GET /api/auth-methods itself, routes everything under /api/auth to the
  * real Better Auth handler, and — since there is no browser to do it for
- * us — carries the `Set-Cookie` session cookie from each response onto the
- * next request. This is what lets a signup call's session persist into a
- * later `useSession()` read within the same test.
+ * us — maintains a cookie jar across requests the way a browser would.
+ *
+ * This has to be a real per-name jar, not "last response's Set-Cookie wins":
+ * the passkey registration flow sets a *second*, independent challenge
+ * cookie on `/passkey/generate-register-options` without re-sending the
+ * session cookie, so overwriting the jar on that response would silently
+ * drop the session and turn the next request unauthenticated.
  */
 export function createTestAuthFetch(providers: string) {
   const { auth, registry } = buildTestAuth(providers)
-  let cookie: string | null = null
+  const cookieJar = new Map<string, string>()
 
   const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(
@@ -42,7 +72,17 @@ export function createTestAuthFetch(providers: string) {
     }
 
     const headers = new Headers(init?.headers)
-    if (cookie) headers.set("cookie", cookie)
+    if (cookieJar.size > 0) {
+      headers.set(
+        "cookie",
+        [...cookieJar.entries()].map(([name, value]) => `${name}=${value}`).join("; "),
+      )
+    }
+    // A real browser fetch always carries an Origin header (same-origin
+    // included); Better Auth's passkey endpoints read it to validate the
+    // WebAuthn ceremony's expected origin and 400 without one. This stub
+    // fetch has no browser underneath to add it, so it stands in for one.
+    if (!headers.has("origin")) headers.set("origin", "http://localhost:3000")
 
     const response = await auth.handler(
       new Request(url, {
@@ -52,10 +92,7 @@ export function createTestAuthFetch(providers: string) {
       }),
     )
 
-    const setCookie = response.headers.getSetCookie?.() ?? []
-    if (setCookie.length > 0) {
-      cookie = setCookie.map((entry) => entry.split(";")[0]).join("; ")
-    }
+    applySetCookies(cookieJar, response.headers.getSetCookie?.() ?? [])
 
     return response
   }
