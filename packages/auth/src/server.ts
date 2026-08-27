@@ -1,3 +1,29 @@
+/**
+ * WHY `better-auth` IS PINNED TO AN EXACT VERSION (no caret) in
+ * packages/auth/package.json — package.json cannot hold comments, so the
+ * rationale lives here, next to the import it constrains.
+ *
+ * This package does not merely call Better Auth's public API; parts of its
+ * contract are assertions about 1.7 *internals* that were established by
+ * reading the dependency's source, not its documentation:
+ *
+ *   - `accountLinkingConfig()` below relies on `handleOAuthUserInfo`
+ *     auto-linking a new provider to an existing account whenever the
+ *     incoming profile reports `emailVerified: true`. `oauth-integration.test.ts`
+ *     asserts one user, not two, across a Google + Apple login on one address.
+ *   - Those same tests assert that the authorization-code callback trusts the
+ *     `id_token` from the token endpoint without re-verifying its signature,
+ *     which is why a self-signed JWT is a valid stand-in there.
+ *   - `emailAndPasswordConfig()` relies on `/request-password-reset` gating on
+ *     the *presence* of `sendResetPassword` rather than on
+ *     `emailAndPassword.enabled` — that is what keeps password reset off a
+ *     social-only deployment.
+ *
+ * A caret range lets a patch or minor release change any of that silently, on
+ * someone else's `install`, in a security-critical path. Pinned, a bump is a
+ * reviewable diff that re-runs those tests on purpose. The `@better-auth/*`
+ * plugins keep their carets: this package uses only their documented surface.
+ */
 import { authSchema, getDb } from "@app/db"
 import { expo } from "@better-auth/expo"
 import { passkey } from "@better-auth/passkey"
@@ -5,7 +31,17 @@ import { betterAuth, type BetterAuthOptions, type BetterAuthPlugin } from "bette
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
 import { bearer } from "better-auth/plugins/bearer"
 
-import { createProviderRegistry, type ProviderRegistry } from "./config"
+import {
+  createProviderRegistry,
+  parseRequireEmailVerification,
+  type ProviderRegistry,
+} from "./config"
+import {
+  createConsoleMailer,
+  emailVerificationMail,
+  passwordResetMail,
+  type Mailer,
+} from "./mailer"
 
 /**
  * The environment slice auth reads. Passed in rather than read from
@@ -14,6 +50,7 @@ import { createProviderRegistry, type ProviderRegistry } from "./config"
  */
 export interface AuthEnv {
   AUTH_PROVIDERS?: string | undefined
+  AUTH_REQUIRE_EMAIL_VERIFICATION?: string | undefined
   BETTER_AUTH_SECRET?: string | undefined
   BETTER_AUTH_URL?: string | undefined
   GOOGLE_CLIENT_ID?: string | undefined
@@ -62,6 +99,12 @@ export interface CreateAuthOptions {
   /** Framework plugins appended last (e.g. nextCookies in apps/web). */
   plugins?: BetterAuthPlugin[]
   /**
+   * Where password-reset and email-verification messages go. Defaults to the
+   * console mailer, which prints them instead of sending them — fine for
+   * local development and CI, never for production. See `./mailer`.
+   */
+  mailer?: Mailer
+  /**
    * Better Auth's `advanced` block. Exposed because it silently disables the
    * origin and callbackURL checks when NODE_ENV=test — a suite that wants to
    * exercise those checks has to turn them back on with
@@ -106,6 +149,76 @@ export function socialProvidersFor(
         appBundleIdentifier: requireEnv(env, "APPLE_BUNDLE_ID", "apple"),
       },
     }),
+  }
+}
+
+/**
+ * The email/password fragment, including the two mail-driven flows.
+ *
+ * `sendResetPassword` is attached only when `email-password` is enabled, and
+ * that gating is load-bearing rather than tidiness: Better Auth mounts
+ * `/request-password-reset` unconditionally and gates it on the *presence of
+ * this callback*, not on `emailAndPassword.enabled`. Attaching it on a
+ * social-only deployment would therefore hand out password-reset links for a
+ * login method that deployment does not offer — a way back in through a door
+ * the operator believes is bricked up.
+ *
+ * `requireEmailVerification` reads the env toggle. When it is on and an
+ * unverified user presents *correct* credentials, Better Auth 1.7.2 answers
+ * 403 EMAIL_NOT_VERIFIED (verified in `api/routes/sign-in.mjs`) and issues no
+ * session. That code is deliberately NOT collapsed into the generic
+ * `INVALID_EMAIL_OR_PASSWORD` the login form shows for a bad password: the
+ * check runs *after* password verification, so the only caller who can ever
+ * observe it already holds the credentials and has learned nothing about who
+ * else exists. Masking it would buy no enumeration resistance and would
+ * strand a legitimate user on "incorrect email or password" with a password
+ * that is, in fact, correct. Enumeration resistance at the pre-credential
+ * boundary is unchanged: wrong password and unknown account still return the
+ * same generic error.
+ */
+export function emailAndPasswordConfig(
+  registry: ProviderRegistry,
+  env: AuthEnv,
+  mailer: Mailer,
+): NonNullable<BetterAuthOptions["emailAndPassword"]> {
+  const enabled = registry.has("email-password")
+
+  return {
+    enabled,
+    requireEmailVerification: parseRequireEmailVerification(
+      env.AUTH_REQUIRE_EMAIL_VERIFICATION,
+    ),
+    ...(enabled && {
+      sendResetPassword: async ({ user, url }) => {
+        await mailer.sendMail(passwordResetMail({ to: user.email, url }))
+      },
+    }),
+  }
+}
+
+/**
+ * The email-verification fragment, or `undefined` when `email-password` is
+ * disabled — a social-only deployment has no address this package owns the
+ * proof of, since the provider already vouched for it.
+ *
+ * `sendOnSignUp` tracks the toggle rather than being unconditionally true:
+ * with verification optional, mailing every new signup a link they are never
+ * asked to click is noise, and it would change the behavior of every existing
+ * signup path. With the toggle on, the link is the only way back into the
+ * account, so it goes out at signup.
+ */
+export function emailVerificationConfig(
+  registry: ProviderRegistry,
+  env: AuthEnv,
+  mailer: Mailer,
+): BetterAuthOptions["emailVerification"] {
+  if (!registry.has("email-password")) return undefined
+
+  return {
+    sendOnSignUp: parseRequireEmailVerification(env.AUTH_REQUIRE_EMAIL_VERIFICATION),
+    sendVerificationEmail: async ({ user, url }) => {
+      await mailer.sendMail(emailVerificationMail({ to: user.email, url }))
+    },
   }
 }
 
@@ -174,15 +287,16 @@ export function pluginsFor(
 export function createAuth(options: CreateAuthOptions = {}) {
   const env = options.env ?? (process.env as AuthEnv)
   const registry = createProviderRegistry(env.AUTH_PROVIDERS)
+  const mailer = options.mailer ?? createConsoleMailer()
+  const emailVerification = emailVerificationConfig(registry, env, mailer)
 
   const auth = betterAuth({
     baseURL: env.BETTER_AUTH_URL,
     secret: env.BETTER_AUTH_SECRET,
     database:
       options.database ?? drizzleAdapter(getDb(), { provider: "pg", schema: authSchema }),
-    emailAndPassword: {
-      enabled: registry.has("email-password"),
-    },
+    emailAndPassword: emailAndPasswordConfig(registry, env, mailer),
+    ...(emailVerification && { emailVerification }),
     socialProviders: socialProvidersFor(registry, env),
     account: accountLinkingConfig(),
     trustedOrigins: mobileTrustedOrigins(env),

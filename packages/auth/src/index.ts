@@ -2,6 +2,8 @@ export {
   KNOWN_PROVIDERS,
   DEFAULT_PROVIDERS,
   parseProviders,
+  parseBooleanEnv,
+  parseRequireEmailVerification,
   createProviderRegistry,
   authMethodsResponse,
   type ProviderId,
@@ -10,8 +12,20 @@ export {
 } from "./config"
 
 export {
+  CONSOLE_MAILER_BANNER,
+  createConsoleMailer,
+  emailVerificationMail,
+  passwordResetMail,
+  type ConsoleMailerOptions,
+  type Mailer,
+  type OutgoingMail,
+} from "./mailer"
+
+export {
   accountLinkingConfig,
   createAuth,
+  emailAndPasswordConfig,
+  emailVerificationConfig,
   mountedRoutes,
   pluginsFor,
   socialProvidersFor,

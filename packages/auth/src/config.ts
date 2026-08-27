@@ -43,6 +43,45 @@ export function parseProviders(raw: string | undefined): ProviderId[] {
   return KNOWN_PROVIDERS.filter((known) => requested.includes(known))
 }
 
+/** Accepted spellings for a boolean env var, in both directions. */
+const TRUE_VALUES = ["1", "true", "yes", "on"]
+const FALSE_VALUES = ["0", "false", "no", "off"]
+
+/**
+ * Parse a boolean environment variable.
+ *
+ * Unset or blank takes `fallback`; anything outside the accepted spellings
+ * throws, for the same reason an unknown id in AUTH_PROVIDERS throws: a typo
+ * that silently reads as `false` would disable a security control in
+ * production while the deployment believes it is on.
+ */
+export function parseBooleanEnv(
+  raw: string | undefined,
+  options: { name: string; fallback: boolean },
+): boolean {
+  const value = (raw ?? "").trim().toLowerCase()
+  if (value.length === 0) return options.fallback
+  if (TRUE_VALUES.includes(value)) return true
+  if (FALSE_VALUES.includes(value)) return false
+
+  throw new Error(
+    `${options.name} must be one of ${[...TRUE_VALUES, ...FALSE_VALUES].join(", ")}, got "${raw}".`,
+  )
+}
+
+/**
+ * Whether a session may be issued to an account whose email is unproven.
+ *
+ * Defaults OFF: turning it on is a breaking change for any deployment with
+ * existing unverified users (they are all locked out at once, and every
+ * signup gains a mandatory round-trip through a mailbox), so it has to be an
+ * explicit deployment decision rather than something a version bump does to
+ * you.
+ */
+export function parseRequireEmailVerification(raw: string | undefined): boolean {
+  return parseBooleanEnv(raw, { name: "AUTH_REQUIRE_EMAIL_VERIFICATION", fallback: false })
+}
+
 export interface ProviderRegistry {
   /** The enabled providers, in canonical order. */
   readonly enabled: readonly ProviderId[]

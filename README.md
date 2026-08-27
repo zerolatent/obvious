@@ -55,6 +55,7 @@ Copy `.env.example` to `.env` and fill in what your enabled providers need.
 | `DATABASE_URL` | Always | `packages/db/src/client.ts` |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | `google` in `AUTH_PROVIDERS` | `packages/auth/src/server.ts` (`socialProvidersFor`) |
 | `APPLE_CLIENT_ID`, `APPLE_CLIENT_SECRET`, `APPLE_BUNDLE_ID` | `apple` in `AUTH_PROVIDERS` | `packages/auth/src/server.ts` (`socialProvidersFor`) |
+| `AUTH_REQUIRE_EMAIL_VERIFICATION` | Optional (defaults to `false`) | `packages/auth/src/config.ts` (`parseRequireEmailVerification`) — when true, an account with an unproven email address cannot be issued a session. Accepts `1/true/yes/on` and `0/false/no/off`; anything else throws at boot |
 | `MOBILE_APP_SCHEME` | Optional (defaults to `obvious-auth`, matching `apps/mobile/app.json`'s `expo.scheme`) | `packages/auth/src/server.ts` (`mobileTrustedOrigins`) — trusts the mobile app's deep-link scheme as an OAuth callback origin |
 | `EXPO_PUBLIC_AUTH_BASE_URL` | Optional, mobile only (defaults to `http://localhost:3000`) | `apps/mobile/src/auth/config.ts` — where the mobile client points |
 
@@ -63,6 +64,87 @@ are enforced at boot: enabling `google` or `apple` in `AUTH_PROVIDERS`
 without the matching credentials throws immediately
 (`Auth provider "google" is enabled via AUTH_PROVIDERS but GOOGLE_CLIENT_ID is not set.`)
 rather than mounting a half-configured provider.
+
+## Password reset & email verification
+
+Both flows are mail-driven, and mail delivery is a seam rather than a
+dependency. `packages/auth/src/mailer.ts` defines the whole contract:
+
+```ts
+interface OutgoingMail { to: string; subject: string; text: string; html: string }
+interface Mailer { sendMail(mail: OutgoingMail): Promise<void> }
+```
+
+No SMTP client or provider SDK ships in this repo. Delivery has a different
+right answer at every deployment, so the interface is what's provided and the
+adapter is yours — roughly ten lines against any provider:
+
+```ts
+import { Resend } from "resend"
+import { createAuth, type Mailer } from "@app/auth"
+
+const resend = new Resend(process.env.RESEND_API_KEY)
+
+const mailer: Mailer = {
+  async sendMail({ to, subject, text, html }) {
+    // Throwing here surfaces the failure in the auth request that caused it,
+    // which is the point: a reset email that silently vanished looks, to the
+    // user, exactly like one that was never requested.
+    const { error } = await resend.emails.send({ from: "auth@example.com", to, subject, text, html })
+    if (error) throw new Error(`Reset/verification email failed: ${error.message}`)
+  },
+}
+
+export const { auth } = createAuth({ mailer })
+```
+
+SendGrid (`sgMail.send`), SES (`SendEmailCommand`), Postmark, Nodemailer, or
+an internal queue all fit the same shape.
+
+**The default is a console mailer, and it is for development only.** With no
+`mailer` passed, `createAuth()` prints each message — action link included —
+to the server log behind a `DEV ONLY — no email was sent` banner, so a fresh
+clone can walk the entire reset round-trip with zero credentials configured.
+In production it would do exactly two unwanted things: send nothing, and
+write live reset tokens into your log stream. Pass a real `mailer` before you
+deploy.
+
+### The flows
+
+Both are Better Auth's own routes; this package supplies the callbacks that
+make them work.
+
+- **Reset** — `POST /api/auth/request-password-reset` `{ email }` mails a link
+  to `/api/auth/reset-password/<token>`; `POST /api/auth/reset-password`
+  `{ token, newPassword }` completes it. The token is single-use, valid for an
+  hour. An unknown address gets the same response as a known one and mails
+  nobody. Reset is wired **only** when `email-password` is in `AUTH_PROVIDERS`
+  — on a social-only deployment the endpoint answers `RESET_PASSWORD_DISABLED`,
+  because a login method that is turned off must not be resettable.
+- **Verification** — `GET /api/auth/verify-email?token=...` marks the address
+  proven. `POST /api/auth/send-verification-email` re-sends on demand.
+
+### `AUTH_REQUIRE_EMAIL_VERIFICATION`
+
+Off by default, which preserves existing behavior exactly: no verification
+mail on signup, and unverified users log in normally.
+
+Turned on, signup mails a verification link and sign-in with correct
+credentials for an unverified account returns `403 EMAIL_NOT_VERIFIED` with no
+session. Note that this is a *distinct* error rather than the generic
+"Incorrect email or password." the login form shows otherwise. That is
+deliberate: Better Auth runs the verification check **after** the password
+check, so the only caller who can ever see `EMAIL_NOT_VERIFIED` already holds
+the correct credentials and learns nothing about who else has an account.
+Collapsing it into the generic error would buy no enumeration resistance and
+would leave a legitimate user staring at "incorrect password" for a password
+that is correct. Enumeration resistance at the boundary that matters is
+unchanged and still tested: a wrong password and an unknown account return
+identical responses.
+
+Turning this on is a breaking change for a deployment that already has
+unverified users — they are all locked out until they click a link — so it is
+an explicit opt-in, never a default.
 
 ## Running web + mobile against the server
 
@@ -117,6 +199,10 @@ packages/auth/src/*.test.ts        config.test.ts           — AUTH_PROVIDERS p
                                                                   methods match
                                     oauth-integration.test.ts — OAuth callback + cross-provider
                                                                 account-linking behavior
+                                    email-flows.test.ts       — password-reset round-trip and
+                                                                email-verification gating against
+                                                                the real handler + a recording
+                                                                mailer
                                     schema-parity.test.ts     — Drizzle schema matches what
                                                                 Better Auth expects
 
@@ -137,8 +223,9 @@ apps/mobile/src/**/*.test.ts       Unit tests for the biometric gate (no-hardwar
                                     auth-methods parsing, deep-link scheme resolution
 ```
 
-Run everything with `bun run test` (Vitest workspaces, one process, 20 files /
-183 tests as of this writing). Run a single workspace with
+Run everything with `bun run test` (Vitest workspaces, one process, 21 files /
+200 tests as of this writing — 3 of them skip cleanly without a reachable
+`DATABASE_URL`). Run a single workspace with
 `bun run --filter <name> test` or `cd` into it and run `vitest` directly.
 
 ### A note on origin validation in tests
