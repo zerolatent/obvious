@@ -20,6 +20,9 @@ function stubMethodsFetch(respond: () => Response | Promise<Response>) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  // Several tests below push OAuth callback query params onto the URL —
+  // never leak that into the next test's window.location.
+  window.history.replaceState(null, "", "/")
 })
 
 describe("AuthMethodsPanel", () => {
@@ -34,7 +37,10 @@ describe("AuthMethodsPanel", () => {
   })
 
   it("renders no email/password form when the method is disabled", async () => {
-    stubMethodsFetch(() => Response.json({ methods: ["google"] }))
+    // passkey has no client UI yet, so a methods response naming only it
+    // still renders the empty state — same case the email-password check
+    // above exercises, without relying on a provider that now has its own UI.
+    stubMethodsFetch(() => Response.json({ methods: ["passkey"] }))
 
     render(<AuthMethodsPanel mode="login" />)
 
@@ -78,5 +84,91 @@ describe("AuthMethodsPanel", () => {
     render(<AuthMethodsPanel mode="login" />)
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/couldn't load sign-in options/i)
+  })
+})
+
+describe("AuthMethodsPanel social button visibility", () => {
+  it("renders the Google button only when google is in the methods response", async () => {
+    stubMethodsFetch(() => Response.json({ methods: ["email-password", "google"] }))
+
+    render(<AuthMethodsPanel mode="login" />)
+
+    expect(await screen.findByRole("button", { name: /continue with google/i })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /continue with apple/i })).not.toBeInTheDocument()
+  })
+
+  it("renders the Apple button only when apple is in the methods response", async () => {
+    stubMethodsFetch(() => Response.json({ methods: ["apple"] }))
+
+    render(<AuthMethodsPanel mode="login" />)
+
+    expect(await screen.findByRole("button", { name: /continue with apple/i })).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /continue with google/i })).not.toBeInTheDocument()
+  })
+
+  it("renders neither social button when neither provider is enabled", async () => {
+    stubMethodsFetch(() => Response.json({ methods: ["email-password"] }))
+
+    render(<AuthMethodsPanel mode="login" />)
+
+    await screen.findByRole("form", { name: /log in with email and password/i })
+    expect(screen.queryByRole("button", { name: /continue with google/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /continue with apple/i })).not.toBeInTheDocument()
+  })
+
+  it("renders every enabled method side by side", async () => {
+    stubMethodsFetch(() => Response.json({ methods: ["email-password", "google", "apple"] }))
+
+    render(<AuthMethodsPanel mode="login" />)
+
+    expect(
+      await screen.findByRole("form", { name: /log in with email and password/i }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /continue with google/i })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /continue with apple/i })).toBeInTheDocument()
+  })
+})
+
+describe("AuthMethodsPanel OAuth callback state", () => {
+  it("returns to the login page unchanged when the user cancels provider consent", async () => {
+    window.history.pushState(null, "", "/login?error=access_denied")
+    stubMethodsFetch(() => Response.json({ methods: ["email-password", "google"] }))
+
+    render(<AuthMethodsPanel mode="login" />)
+
+    // The page looks exactly as it would with no callback at all: the
+    // methods render normally and no OAuth-related alert appears.
+    expect(
+      await screen.findByRole("form", { name: /log in with email and password/i }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /continue with google/i })).toBeInTheDocument()
+    expect(screen.queryByText(/sign-in didn't go through/i)).not.toBeInTheDocument()
+
+    // The query string is scrubbed so a refresh can't replay the same state.
+    expect(window.location.search).toBe("")
+    expect(window.location.pathname).toBe("/login")
+  })
+
+  it("shows a dismissible error banner when the provider reports a failure, form methods stay usable", async () => {
+    window.history.pushState(null, "", "/login?error=server_error")
+    stubMethodsFetch(() => Response.json({ methods: ["email-password", "google"] }))
+    const user = userEvent.setup()
+
+    render(<AuthMethodsPanel mode="login" />)
+
+    const banner = await screen.findByText(/sign-in didn't go through/i)
+    expect(banner).toBeInTheDocument()
+
+    // Email/password and the social button remain fully usable alongside it.
+    const emailField = screen.getByLabelText(/^email$/i)
+    expect(emailField).toBeEnabled()
+    expect(screen.getByRole("button", { name: /log in$/i })).toBeEnabled()
+    expect(screen.getByRole("button", { name: /continue with google/i })).toBeEnabled()
+
+    // The query string is scrubbed regardless of outcome.
+    expect(window.location.search).toBe("")
+
+    await user.click(screen.getByRole("button", { name: /try again/i }))
+    expect(screen.queryByText(/sign-in didn't go through/i)).not.toBeInTheDocument()
   })
 })
