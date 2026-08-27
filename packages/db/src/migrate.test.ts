@@ -10,16 +10,59 @@ import { applyMigrations } from "./migrate"
  * Proves the generated SQL actually applies to Postgres — a schema that only
  * typechecks is a schema nobody has run. CI provides DATABASE_URL from the
  * Postgres service container.
+ *
+ * Off CI, Postgres is optional: a developer sandbox without a local server
+ * skips this suite rather than failing the whole run. Reachability is probed,
+ * not assumed from the variable being set — a stale DATABASE_URL pointing at
+ * nothing is the common case, and it used to surface as a connection error
+ * inside beforeAll.
  */
 
 const adminUrl = process.env.DATABASE_URL
 
-// A missing DATABASE_URL in CI must fail, not silently skip: a skipped
-// migration test is indistinguishable from a passing one in the run summary.
-if (!adminUrl && process.env.CI) {
+/**
+ * A readable cause. A refused TCP connection surfaces as an AggregateError
+ * whose own message is empty (one entry per resolved address), so the useful
+ * text lives on the first inner error.
+ */
+function explainError(error: unknown): string {
+  if (error instanceof AggregateError && error.errors.length > 0) {
+    return error.errors.map((inner) => explainError(inner)).join("; ")
+  }
+  if (error instanceof Error) return error.message || error.name
+  return String(error)
+}
+
+/** null when Postgres answered; otherwise why this suite cannot run. */
+async function probePostgres(url: string | undefined): Promise<string | null> {
+  if (!url) return "DATABASE_URL not set"
+
+  const client = new Client({ connectionString: url, connectionTimeoutMillis: 5_000 })
+  try {
+    await client.connect()
+    await client.end()
+    return null
+  } catch (error) {
+    // end() on a client that never connected rejects; the probe result is
+    // already decided, so this cleanup must not mask it.
+    await client.end().catch(() => {})
+    return `DATABASE_URL not reachable (${url.replace(/\/\/[^@]*@/, "//")}): ${explainError(error)}`
+  }
+}
+
+const skipReason = await probePostgres(adminUrl)
+
+// In CI the database is a service container, so an unreachable one is a broken
+// pipeline, not a local convenience: a skipped migration test is
+// indistinguishable from a passing one in the run summary.
+if (skipReason && process.env.CI) {
   throw new Error(
-    "DATABASE_URL is required in CI so the migration-apply test cannot silently skip.",
+    `Postgres is required in CI so the migration-apply test cannot silently skip. ${skipReason}`,
   )
+}
+
+if (skipReason) {
+  console.warn(`Skipping migration-apply test: ${skipReason}`)
 }
 
 const databaseName = `auth_migrate_test_${randomBytes(6).toString("hex")}`
@@ -30,8 +73,11 @@ function withDatabase(url: string, name: string): string {
   return parsed.toString()
 }
 
-describe.skipIf(!adminUrl)("applyMigrations", () => {
-  const targetUrl = withDatabase(adminUrl ?? "", databaseName)
+describe.skipIf(skipReason !== null)("applyMigrations", () => {
+  // Vitest still runs a skipped suite's factory, so this must not parse "":
+  // `new URL("")` throwing here is what failed the run on a machine without
+  // Postgres, before any skip decision could take effect.
+  const targetUrl = adminUrl ? withDatabase(adminUrl, databaseName) : ""
   let admin: Client
 
   beforeAll(async () => {
