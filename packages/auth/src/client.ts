@@ -18,6 +18,14 @@ export function createWebAuthClient(options: WebAuthClientOptions = {}) {
   return createAuthClient({
     baseURL: options.baseURL,
     plugins: [passkeyClient()],
+    fetchOptions: {
+      // better-auth otherwise snapshots the global `fetch` reference once,
+      // at client-construction time. Indirecting through `globalThis.fetch`
+      // on every call keeps this client working when something swaps the
+      // global out after construction (tests stubbing `fetch` chief among
+      // them) instead of silently keeping the stale reference forever.
+      customFetchImpl: (...args) => globalThis.fetch(...args),
+    },
   })
 }
 
