@@ -71,16 +71,16 @@ The Better Auth server lives inside the Next.js app at
 HTTP, so start the web app first.
 
 ```bash
-pnpm install
+bun install
 cp .env.example .env   # fill in BETTER_AUTH_SECRET, DATABASE_URL, provider credentials
-pnpm dev                # apps/web — Next.js dev server on :3000
+bun dev                 # apps/web — Next.js dev server on :3000
 ```
 
 In a second terminal, for the mobile client:
 
 ```bash
 cd apps/mobile
-EXPO_PUBLIC_AUTH_BASE_URL=http://localhost:3000 pnpm dev   # expo start --clear
+EXPO_PUBLIC_AUTH_BASE_URL=http://localhost:3000 bun dev   # expo start --clear
 ```
 
 Point a simulator/device or Expo Go at the printed Metro URL. `EXPO_PUBLIC_AUTH_BASE_URL`
@@ -127,9 +127,9 @@ apps/mobile/src/**/*.test.ts       Unit tests for the biometric gate (no-hardwar
                                     auth-methods parsing, deep-link scheme resolution
 ```
 
-Run everything with `pnpm test` (Vitest workspaces, one process, 20 files /
+Run everything with `bun run test` (Vitest workspaces, one process, 20 files /
 183 tests as of this writing). Run a single workspace with
-`pnpm --filter <name> test` or `cd` into it and run `vitest` directly.
+`bun run --filter <name> test` or `cd` into it and run `vitest` directly.
 
 ### A note on origin validation in tests
 
