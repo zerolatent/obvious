@@ -1,0 +1,17 @@
+# Repo policy for zerolatent/obvious
+# Written during onboarding. The repository was empty at scan time, so the
+# default branch did not exist on GitHub and was initialized as `main` by this
+# run. GitHub allows merge commits, squash, and rebase; squash is the default
+# choice here.
+
+version: 1
+
+git:
+  defaultBranch: main
+
+merge:
+  method: squash
+  deleteBranchAfterMerge: false
+
+onboarding:
+  requireHumanMerge: true
