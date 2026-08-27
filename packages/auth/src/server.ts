@@ -1,4 +1,5 @@
 import { authSchema, getDb } from "@app/db"
+import { expo } from "@better-auth/expo"
 import { passkey } from "@better-auth/passkey"
 import { betterAuth, type BetterAuthOptions, type BetterAuthPlugin } from "better-auth"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
@@ -20,6 +21,37 @@ export interface AuthEnv {
   APPLE_CLIENT_ID?: string | undefined
   APPLE_CLIENT_SECRET?: string | undefined
   APPLE_BUNDLE_ID?: string | undefined
+  MOBILE_APP_SCHEME?: string | undefined
+}
+
+/** The scheme apps/mobile registers with the OS (app.json `expo.scheme`). */
+export const DEFAULT_MOBILE_APP_SCHEME = "obvious-auth"
+
+// RFC 3986 scheme grammar, lower-cased: a bad value here would silently
+// produce an origin that matches nothing, so it is rejected at boot instead.
+const SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*$/
+
+/**
+ * The app-scheme origin the OAuth deep-link callback returns through.
+ *
+ * Better Auth validates `callbackURL` against `trustedOrigins` and answers a
+ * non-matching one with 403 INVALID_CALLBACK_URL, so without this entry the
+ * mobile social hop dies on the last leg — after the user has already
+ * consented at the provider.
+ */
+export function mobileTrustedOrigins(env: AuthEnv): string[] {
+  const raw = (env.MOBILE_APP_SCHEME ?? DEFAULT_MOBILE_APP_SCHEME).trim()
+  const scheme = raw.replace(/:\/*$/, "").toLowerCase()
+
+  if (!SCHEME_PATTERN.test(scheme)) {
+    throw new Error(
+      `MOBILE_APP_SCHEME must be a URL scheme like "${DEFAULT_MOBILE_APP_SCHEME}", got "${raw}".`,
+    )
+  }
+
+  // A pattern with no authority and no path matches every URL on the scheme,
+  // so both `obvious-auth://` and `obvious-auth://signed-in` are accepted.
+  return [`${scheme}://`]
 }
 
 export interface CreateAuthOptions {
@@ -29,6 +61,13 @@ export interface CreateAuthOptions {
   database?: BetterAuthOptions["database"]
   /** Framework plugins appended last (e.g. nextCookies in apps/web). */
   plugins?: BetterAuthPlugin[]
+  /**
+   * Better Auth's `advanced` block. Exposed because it silently disables the
+   * origin and callbackURL checks when NODE_ENV=test — a suite that wants to
+   * exercise those checks has to turn them back on with
+   * `{ disableOriginCheck: false }`.
+   */
+  advanced?: BetterAuthOptions["advanced"]
 }
 
 function requireEnv(env: AuthEnv, key: keyof AuthEnv, provider: string): string {
@@ -117,6 +156,11 @@ export function pluginsFor(
     // Header sessions: the Expo client's deep-link OAuth exchange and any
     // future API-only consumer depend on them, so this is never optional.
     bearer(),
+    // Rewrites the `expo-origin` header onto `origin` for requests from the
+    // native app and mounts the authorization proxy the Expo client calls.
+    // Not gated on AUTH_PROVIDERS: that lists login methods, not the client
+    // platforms allowed to use them.
+    expo(),
     ...(registry.has("passkey") ? [passkey()] : []),
     ...extra,
   ]
@@ -141,7 +185,9 @@ export function createAuth(options: CreateAuthOptions = {}) {
     },
     socialProviders: socialProvidersFor(registry, env),
     account: accountLinkingConfig(),
+    trustedOrigins: mobileTrustedOrigins(env),
     plugins: pluginsFor(registry, options.plugins),
+    ...(options.advanced && { advanced: options.advanced }),
   })
 
   return { auth, registry }
