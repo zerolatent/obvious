@@ -51,7 +51,19 @@ function buildDb(): MemoryDb {
 }
 
 function buildAuth(db: MemoryDb) {
-  return createAuth({ env: CREDENTIALS, database: memoryAdapter(db) })
+  return createAuth({
+    env: CREDENTIALS,
+    database: memoryAdapter(db),
+    // NODE_ENV=test otherwise skips origin validation entirely, so these
+    // callback flows would pass even against a request with no Origin at
+    // all. `call()` never sets one, and the suite still passes below
+    // because the checks this file exercises (state-bound callback,
+    // account linking) don't turn on origin validation the way the
+    // deep-link callbackURL check in provider-enablement.test.ts does —
+    // pinning the flag here documents that this suite doesn't rely on the
+    // test-mode bypass, rather than leaving it an unverified assumption.
+    advanced: { disableOriginCheck: false },
+  })
 }
 
 // One signing key reused across tests: the callback path never checks the

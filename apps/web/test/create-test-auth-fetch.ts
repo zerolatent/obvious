@@ -16,6 +16,15 @@ function buildTestAuth(providers: string) {
   return createAuth({
     env: { ...CREDENTIALS, AUTH_PROVIDERS: providers },
     database: memoryAdapter({ user: [], session: [], account: [], verification: [], passkey: [] }),
+    // Better Auth skips origin validation whenever NODE_ENV=test, which would
+    // let every flow in this file pass even if the Origin header below were
+    // wrong or missing. Every request this fetch sends carries a same-origin
+    // header (see fetchImpl), so turning the real check back on costs
+    // nothing here and proves the email/password and passkey ceremonies
+    // actually satisfy it, the same way
+    // packages/auth/src/provider-enablement.test.ts proves it for the
+    // mobile deep-link callback.
+    advanced: { disableOriginCheck: false },
   })
 }
 
