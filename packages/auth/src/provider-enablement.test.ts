@@ -1,8 +1,18 @@
+import { readFileSync } from "node:fs"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+
 import { memoryAdapter } from "better-auth/adapters/memory"
 import { describe, expect, it } from "vitest"
 
 import { authMethodsResponse, type ProviderId } from "./config"
-import { createAuth, mountedRoutes, type AuthEnv } from "./server"
+import {
+  createAuth,
+  DEFAULT_MOBILE_APP_SCHEME,
+  mobileTrustedOrigins,
+  mountedRoutes,
+  type AuthEnv,
+} from "./server"
 
 /**
  * The invariant this file exists for: what AUTH_PROVIDERS says is exactly what
@@ -93,6 +103,12 @@ describe.each(SUBSETS)("AUTH_PROVIDERS=$providers", ({ providers, expected }) =>
     expect(routes).toContain("/sign-out")
   })
 
+  it("always mounts the expo authorization proxy", () => {
+    // The Expo client routes its OAuth authorization through this endpoint;
+    // like bearer, it is a client platform's needs, not a login method.
+    expect(routes).toContain("/expo-authorization-proxy")
+  })
+
   it(`${has("passkey") ? "serves" : "rejects"} passkey registration options`, async () => {
     const response = await callAuth(auth, "/passkey/generate-register-options")
     if (has("passkey")) {
@@ -143,6 +159,102 @@ describe.each(SUBSETS)("AUTH_PROVIDERS=$providers", ({ providers, expected }) =>
       expect(response.status).toBe(404)
       expect(response.body.code).toBe("PROVIDER_NOT_FOUND")
     }
+  })
+})
+
+describe("mobileTrustedOrigins", () => {
+  it("trusts the app scheme by default", () => {
+    expect(mobileTrustedOrigins({})).toEqual([`${DEFAULT_MOBILE_APP_SCHEME}://`])
+  })
+
+  it("defaults to the scheme apps/mobile actually registers with the OS", () => {
+    // The server trusting a scheme the app does not register is invisible
+    // until a real device completes an OAuth hop, so pin them together here.
+    const manifestPath = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../../apps/mobile/app.json",
+    )
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      expo: { scheme: string }
+    }
+    expect(DEFAULT_MOBILE_APP_SCHEME).toBe(manifest.expo.scheme)
+  })
+
+  it("honours MOBILE_APP_SCHEME and normalises how it is written", () => {
+    expect(mobileTrustedOrigins({ MOBILE_APP_SCHEME: "other-app" })).toEqual(["other-app://"])
+    expect(mobileTrustedOrigins({ MOBILE_APP_SCHEME: "Other-App://" })).toEqual(["other-app://"])
+    expect(mobileTrustedOrigins({ MOBILE_APP_SCHEME: " other-app: " })).toEqual(["other-app://"])
+  })
+
+  it("rejects a value that is not a URL scheme", () => {
+    // Silently accepting this would produce an origin that matches nothing.
+    expect(() => mobileTrustedOrigins({ MOBILE_APP_SCHEME: "https://example.com" })).toThrowError(
+      /MOBILE_APP_SCHEME/,
+    )
+    expect(() => mobileTrustedOrigins({ MOBILE_APP_SCHEME: "9lives" })).toThrowError(
+      /MOBILE_APP_SCHEME/,
+    )
+    expect(() => mobileTrustedOrigins({ MOBILE_APP_SCHEME: "" })).toThrowError(/MOBILE_APP_SCHEME/)
+  })
+})
+
+/**
+ * Better Auth sets `skipOriginCheck` when NODE_ENV=test, so a suite that just
+ * posts a callbackURL proves nothing about origin trust — which is how the
+ * missing app-scheme origin passed CI and still broke a real device. These
+ * tests turn the check back on and drive the middleware for real.
+ */
+function buildAuthEnforcingOrigins(env: Partial<AuthEnv> = {}) {
+  return createAuth({
+    env: { ...CREDENTIALS, AUTH_PROVIDERS: "google,apple", ...env },
+    database: memoryAdapter({ user: [], session: [], account: [], verification: [], passkey: [] }),
+    advanced: { disableOriginCheck: false },
+  })
+}
+
+describe("mobile OAuth deep-link callback", () => {
+  const { auth } = buildAuthEnforcingOrigins()
+
+  it.each([`${DEFAULT_MOBILE_APP_SCHEME}://`, `${DEFAULT_MOBILE_APP_SCHEME}://signed-in`])(
+    "accepts %s as the social callback",
+    async (callbackURL) => {
+      const response = await callAuth(auth, "/sign-in/social", { provider: "google", callbackURL })
+      expect(response.status).toBe(200)
+      expect(response.body.url).toContain("http")
+    },
+  )
+
+  it("refuses a scheme this deployment does not own", async () => {
+    const response = await callAuth(auth, "/sign-in/social", {
+      provider: "google",
+      callbackURL: "evil-app://steal",
+    })
+    expect(response.status).toBe(403)
+    expect(response.body.code).toBe("INVALID_CALLBACK_URL")
+  })
+
+  it("keeps the web app's own origin trusted", async () => {
+    const context = await auth.$context
+    expect(context.isTrustedOrigin("http://localhost:3000")).toBe(true)
+    expect(context.isTrustedOrigin(`${DEFAULT_MOBILE_APP_SCHEME}://signed-in`)).toBe(true)
+    expect(context.isTrustedOrigin("evil-app://steal")).toBe(false)
+  })
+
+  it("follows MOBILE_APP_SCHEME when a deployment overrides it", async () => {
+    const { auth: renamed } = buildAuthEnforcingOrigins({ MOBILE_APP_SCHEME: "other-app" })
+
+    const accepted = await callAuth(renamed, "/sign-in/social", {
+      provider: "google",
+      callbackURL: "other-app://",
+    })
+    expect(accepted.status).toBe(200)
+
+    const refused = await callAuth(renamed, "/sign-in/social", {
+      provider: "google",
+      callbackURL: `${DEFAULT_MOBILE_APP_SCHEME}://`,
+    })
+    expect(refused.status).toBe(403)
+    expect(refused.body.code).toBe("INVALID_CALLBACK_URL")
   })
 })
 
