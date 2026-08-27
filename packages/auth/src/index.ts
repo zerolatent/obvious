@@ -35,3 +35,32 @@ export {
 } from "./server"
 
 export { createWebAuthClient, type WebAuthClient, type WebAuthClientOptions } from "./client"
+
+export {
+  createConsoleLogger,
+  DEFAULT_LOG_LEVEL,
+  LOG_LEVELS,
+  parseLogLevel,
+  type AuthLogger,
+  type LogLevel,
+} from "./logging"
+
+export {
+  DEFAULT_RATE_LIMIT_MAX,
+  DEFAULT_RATE_LIMIT_WINDOW_SECONDS,
+  parseRateLimitConfig,
+  rateLimitCustomRules,
+  rateLimitOptionsFor,
+  type RateLimitConfig,
+} from "./rate-limit"
+
+export {
+  detectOAuthCallbackRejection,
+  detectRateLimitHit,
+  sanitizeAuthPath,
+  withRequestLogging,
+  type OAuthCallbackRejectionEvent,
+  type RateLimitHitEvent,
+} from "./request-events"
+
+export { wrapEmailDispatch } from "./email-dispatch"

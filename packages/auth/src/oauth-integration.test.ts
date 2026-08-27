@@ -2,6 +2,7 @@ import { memoryAdapter } from "better-auth/adapters/memory"
 import { generateKeyPair, SignJWT } from "jose"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 
+import { type AuthLogger } from "./logging"
 import { createAuth, type AuthEnv } from "./server"
 
 /**
@@ -50,7 +51,7 @@ function buildDb(): MemoryDb {
   return { user: [], session: [], account: [], verification: [], passkey: [] }
 }
 
-function buildAuth(db: MemoryDb) {
+function buildAuth(db: MemoryDb, options: { logger?: AuthLogger } = {}) {
   return createAuth({
     env: CREDENTIALS,
     database: memoryAdapter(db),
@@ -63,6 +64,7 @@ function buildAuth(db: MemoryDb) {
     // pinning the flag here documents that this suite doesn't rely on the
     // test-mode bypass, rather than leaving it an unverified assumption.
     advanced: { disableOriginCheck: false },
+    logger: options.logger,
   })
 }
 
@@ -329,5 +331,27 @@ describe("user-cancelled consent", () => {
 
     expect(db.user).toHaveLength(0)
     expect(db.account).toHaveLength(0)
+  })
+
+  it("logs a warn through the injected logger", async () => {
+    const db = buildDb()
+    const logger: AuthLogger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    }
+    const { auth } = buildAuth(db, { logger })
+
+    const begin = await beginSocialSignIn(auth, "google")
+    await completeCallback(auth, "google", begin, {
+      error: "access_denied",
+      errorDescription: "The user cancelled the consent screen",
+    })
+
+    expect(logger.warn).toHaveBeenCalledWith("OAuth callback rejected", {
+      provider: "google",
+      errorCode: "access_denied",
+    })
   })
 })

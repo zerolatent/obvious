@@ -36,12 +36,16 @@ import {
   parseRequireEmailVerification,
   type ProviderRegistry,
 } from "./config"
+import { wrapEmailDispatch } from "./email-dispatch"
+import { createConsoleLogger, parseLogLevel, type AuthLogger } from "./logging"
 import {
   createConsoleMailer,
   emailVerificationMail,
   passwordResetMail,
   type Mailer,
 } from "./mailer"
+import { parseRateLimitConfig, rateLimitOptionsFor } from "./rate-limit"
+import { withRequestLogging } from "./request-events"
 
 /**
  * The environment slice auth reads. Passed in rather than read from
@@ -59,6 +63,14 @@ export interface AuthEnv {
   APPLE_CLIENT_SECRET?: string | undefined
   APPLE_BUNDLE_ID?: string | undefined
   MOBILE_APP_SCHEME?: string | undefined
+  /** Verbosity of the default console logger. Defaults to "warn". */
+  AUTH_LOG_LEVEL?: string | undefined
+  /** Defaults to enabled outside of NODE_ENV=test. */
+  AUTH_RATE_LIMIT_ENABLED?: string | undefined
+  /** Defaults to 60. */
+  AUTH_RATE_LIMIT_WINDOW_SECONDS?: string | undefined
+  /** Defaults to 10. */
+  AUTH_RATE_LIMIT_MAX?: string | undefined
 }
 
 /** The scheme apps/mobile registers with the OS (app.json `expo.scheme`). */
@@ -111,14 +123,24 @@ export interface CreateAuthOptions {
    * `{ disableOriginCheck: false }`.
    */
   advanced?: BetterAuthOptions["advanced"]
+  /**
+   * The structured logger for this package's own instrumentation: provider
+   * boot/validation failures, rate-limit hits, rejected OAuth callbacks, and
+   * password-reset/email-verification dispatch. Defaults to a leveled
+   * console logger gated by AUTH_LOG_LEVEL (default "warn", so production
+   * stays quiet until something actually fails). Distinct from Better
+   * Auth's own `advanced` internal logger, which only customizes Better
+   * Auth's own diagnostics.
+   */
+  logger?: AuthLogger
 }
 
-function requireEnv(env: AuthEnv, key: keyof AuthEnv, provider: string): string {
+function requireEnv(env: AuthEnv, key: keyof AuthEnv, provider: string, logger: AuthLogger): string {
   const value = env[key]
   if (!value) {
-    throw new Error(
-      `Auth provider "${provider}" is enabled via AUTH_PROVIDERS but ${key} is not set.`,
-    )
+    const message = `Auth provider "${provider}" is enabled via AUTH_PROVIDERS but ${key} is not set.`
+    logger.error(message, { provider, missingKey: key })
+    throw new Error(message)
   }
   return value
 }
@@ -131,22 +153,23 @@ function requireEnv(env: AuthEnv, key: keyof AuthEnv, provider: string): string 
 export function socialProvidersFor(
   registry: ProviderRegistry,
   env: AuthEnv,
+  logger: AuthLogger,
 ): NonNullable<BetterAuthOptions["socialProviders"]> {
   return {
     ...(registry.has("google") && {
       google: {
-        clientId: requireEnv(env, "GOOGLE_CLIENT_ID", "google"),
-        clientSecret: requireEnv(env, "GOOGLE_CLIENT_SECRET", "google"),
+        clientId: requireEnv(env, "GOOGLE_CLIENT_ID", "google", logger),
+        clientSecret: requireEnv(env, "GOOGLE_CLIENT_SECRET", "google", logger),
       },
     }),
     ...(registry.has("apple") && {
       apple: {
-        clientId: requireEnv(env, "APPLE_CLIENT_ID", "apple"),
-        clientSecret: requireEnv(env, "APPLE_CLIENT_SECRET", "apple"),
+        clientId: requireEnv(env, "APPLE_CLIENT_ID", "apple", logger),
+        clientSecret: requireEnv(env, "APPLE_CLIENT_SECRET", "apple", logger),
         // Required, not optional: Apple's id token audience falls back to
         // this value, so an unset bundle id silently breaks the native
         // sign-in verification path instead of failing at boot.
-        appBundleIdentifier: requireEnv(env, "APPLE_BUNDLE_ID", "apple"),
+        appBundleIdentifier: requireEnv(env, "APPLE_BUNDLE_ID", "apple", logger),
       },
     }),
   }
@@ -175,11 +198,16 @@ export function socialProvidersFor(
  * that is, in fact, correct. Enumeration resistance at the pre-credential
  * boundary is unchanged: wrong password and unknown account still return the
  * same generic error.
+ *
+ * `sendResetPassword` is wrapped in `wrapEmailDispatch` so every attempt is
+ * observable (info on dispatch, warn-and-rethrow on failure) without ever
+ * logging the address or the reset URL/token — only the user id.
  */
 export function emailAndPasswordConfig(
   registry: ProviderRegistry,
   env: AuthEnv,
   mailer: Mailer,
+  logger: AuthLogger,
 ): NonNullable<BetterAuthOptions["emailAndPassword"]> {
   const enabled = registry.has("email-password")
 
@@ -189,9 +217,13 @@ export function emailAndPasswordConfig(
       env.AUTH_REQUIRE_EMAIL_VERIFICATION,
     ),
     ...(enabled && {
-      sendResetPassword: async ({ user, url }) => {
-        await mailer.sendMail(passwordResetMail({ to: user.email, url }))
-      },
+      sendResetPassword: wrapEmailDispatch(
+        "password-reset",
+        async ({ user, url }) => {
+          await mailer.sendMail(passwordResetMail({ to: user.email, url }))
+        },
+        logger,
+      ),
     }),
   }
 }
@@ -206,19 +238,27 @@ export function emailAndPasswordConfig(
  * asked to click is noise, and it would change the behavior of every existing
  * signup path. With the toggle on, the link is the only way back into the
  * account, so it goes out at signup.
+ *
+ * `sendVerificationEmail` is wrapped the same way as `sendResetPassword`
+ * above — logged, never leaking the address or the verification URL/token.
  */
 export function emailVerificationConfig(
   registry: ProviderRegistry,
   env: AuthEnv,
   mailer: Mailer,
+  logger: AuthLogger,
 ): BetterAuthOptions["emailVerification"] {
   if (!registry.has("email-password")) return undefined
 
   return {
     sendOnSignUp: parseRequireEmailVerification(env.AUTH_REQUIRE_EMAIL_VERIFICATION),
-    sendVerificationEmail: async ({ user, url }) => {
-      await mailer.sendMail(emailVerificationMail({ to: user.email, url }))
-    },
+    sendVerificationEmail: wrapEmailDispatch(
+      "email-verification",
+      async ({ user, url }) => {
+        await mailer.sendMail(emailVerificationMail({ to: user.email, url }))
+      },
+      logger,
+    ),
   }
 }
 
@@ -287,22 +327,29 @@ export function pluginsFor(
 export function createAuth(options: CreateAuthOptions = {}) {
   const env = options.env ?? (process.env as AuthEnv)
   const registry = createProviderRegistry(env.AUTH_PROVIDERS)
+  const logger = options.logger ?? createConsoleLogger(parseLogLevel(env.AUTH_LOG_LEVEL))
+  const rateLimitConfig = parseRateLimitConfig(env)
   const mailer = options.mailer ?? createConsoleMailer()
-  const emailVerification = emailVerificationConfig(registry, env, mailer)
+  const emailVerification = emailVerificationConfig(registry, env, mailer, logger)
 
   const auth = betterAuth({
     baseURL: env.BETTER_AUTH_URL,
     secret: env.BETTER_AUTH_SECRET,
     database:
       options.database ?? drizzleAdapter(getDb(), { provider: "pg", schema: authSchema }),
-    emailAndPassword: emailAndPasswordConfig(registry, env, mailer),
+    emailAndPassword: emailAndPasswordConfig(registry, env, mailer, logger),
     ...(emailVerification && { emailVerification }),
-    socialProviders: socialProvidersFor(registry, env),
+    socialProviders: socialProvidersFor(registry, env, logger),
     account: accountLinkingConfig(),
     trustedOrigins: mobileTrustedOrigins(env),
     plugins: pluginsFor(registry, options.plugins),
+    rateLimit: rateLimitOptionsFor(rateLimitConfig),
     ...(options.advanced && { advanced: options.advanced }),
   })
+
+  // Single choke point for every request: logs rate-limit hits and rejected
+  // OAuth callbacks without touching Better Auth's own routing.
+  auth.handler = withRequestLogging(auth.handler, logger)
 
   return { auth, registry }
 }
