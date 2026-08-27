@@ -92,6 +92,16 @@ Database: `DATABASE_URL` must point at a reachable Postgres instance before
 either app can serve authenticated requests (`packages/db` opens the
 connection lazily, on first use).
 
+## Examples
+
+`examples/` has three minimal, runnable sample apps that import the real
+`@app/auth`/`@app/db` workspace packages (never copies): a headless
+`examples/api` server, a `examples/web` Next.js client, and a `examples/mobile`
+Expo client. They're a smaller surface than `apps/*` for learning the wiring
+or bootstrapping a new deployment — see each example's own README for run
+instructions, and the section above for what `AUTH_PROVIDERS` and the other
+environment variables do.
+
 ## Test layout
 
 ```

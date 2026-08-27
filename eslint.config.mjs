@@ -27,6 +27,14 @@ export default tseslint.config(
     },
   },
   {
+    // ESM Node config files (next.config.mjs, etc.) — same Node globals as
+    // the CommonJS config files above, but sourceType stays "module".
+    files: ["**/*.config.mjs"],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
+  {
     languageOptions: {
       parserOptions: {
         ecmaFeatures: { jsx: true },
