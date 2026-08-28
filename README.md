@@ -8,6 +8,46 @@ config change — it never touches flow code. See the
 [spec](https://app.obvious.ai/p/modular-authentication-system-llZSGqVQ) for
 the full design rationale.
 
+## Prerequisites
+
+What to install and provision before `bun install`.
+
+### Tooling
+
+- **Bun >= 1.3.14** — pinned by `packageManager` in the root `package.json`. `bun.lock` is the only lockfile and the scripts are bun-first (`bun run --filter`, `bun run --workspaces`); CI installs with `bun install --frozen-lockfile`. npm and pnpm are not supported — see [Known limitations](#known-limitations--design-tradeoffs).
+- **Node >= 20** (root `engines`) — what the Next.js and Expo toolchains run on. Bun still drives installs and scripts.
+- **PostgreSQL** — the only infrastructure dependency. There is no Redis and no external session store: users, sessions, accounts, and verification tokens all live in Postgres via Drizzle (`packages/db`). Rate-limit counters are the one exception, and they are per process — see [Known limitations](#known-limitations--design-tradeoffs).
+- **Expo toolchain** — only for `apps/mobile` / `examples/mobile`. The auth server and web client need nothing beyond bun, Node, and Postgres.
+
+### Always-required environment variables
+
+Four are required for every deployment, whichever providers are enabled:
+
+| Variable | What it is |
+|---|---|
+| `DATABASE_URL` | Postgres connection string. Must be reachable before either app can serve an authenticated request |
+| `BETTER_AUTH_SECRET` | Signing secret for sessions and tokens. Generate a fresh one per environment |
+| `BETTER_AUTH_URL` | The server's public origin. OAuth redirect URLs are built from it |
+| `AUTH_PROVIDERS` | Which login methods to mount (defaults to `email-password` when unset) |
+
+Everything else — provider credentials, `AUTH_REQUIRE_EMAIL_VERIFICATION`, `AUTH_RATE_LIMIT_*`, `AUTH_LOG_LEVEL`, `MOBILE_APP_SCHEME` — is conditional or optional and is documented in full in [Required environment variables](#required-environment-variables) below. Start from `.env.example`.
+
+### Per-provider external setup
+
+Only needed for the ids you list in `AUTH_PROVIDERS`:
+
+- **`google`** — an OAuth 2.0 client in the Google Cloud Console, with `{BETTER_AUTH_URL}/api/auth/callback/google` registered as an authorized redirect URI. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+- **`apple`** — an Apple developer account with a Services ID whose return URL is `{BETTER_AUTH_URL}/api/auth/callback/apple`, plus the key used to sign the client secret. Set `APPLE_CLIENT_ID`, `APPLE_CLIENT_SECRET`, and `APPLE_BUNDLE_ID`.
+- **`passkey`** — no external account and no credentials. Needs a WebAuthn-capable browser served over HTTPS (or `localhost`); the mobile client uses native biometrics.
+- **Mail delivery** — no provider ships with this repo. Reset and verification messages print to the server log until you pass a `mailer`; see [Password reset & email verification](#password-reset--email-verification).
+
+Both social providers are enforced at boot: enabling one without its credentials throws rather than mounting a half-configured provider.
+
+### Two things that bite behind a proxy or on device
+
+- **Reverse proxies and tunnels.** `BETTER_AUTH_URL` must be the *public* origin, not the internal one. Better Auth trusts that origin plus anything in `BETTER_AUTH_TRUSTED_ORIGINS` (comma-separated; additive on top of what this repo already configures), and answers a request from anywhere else with `403 INVALID_ORIGIN`. Note that `x-forwarded-host` / `x-forwarded-proto` are ignored unless you opt in via `advanced.trustedProxyHeaders`, so a proxy that only advertises the public host through those headers still needs `BETTER_AUTH_URL` set correctly.
+- **Mobile deep links.** `MOBILE_APP_SCHEME` must match `expo.scheme` in `apps/mobile/app.json` (both default to `obvious-auth`). A mismatch kills the social sign-in on its last leg — after the user has already consented at the provider — with `403 INVALID_CALLBACK_URL`.
+
 ## How it works
 
 Everything hangs off one config source: `AUTH_PROVIDERS`, a comma-separated
@@ -320,6 +360,22 @@ callback, and the mobile deep-link callback — all now drive the real check.
 asserting which routes and providers are mounted, not origin trust, and its
 `/sign-in/social` calls always pass the same trusted relative `callbackURL:
 "/"` the deep-link suite already covers with the check on.
+
+## Known limitations & design tradeoffs
+
+What this system deliberately does not do. Each of these is a trade made once, on purpose, and written down here so it is not discovered in production.
+
+**Bun-only package management.** `packageManager` pins `bun@1.3.14`, `bun.lock` is the only lockfile, the scripts use bun's workspace filters, and CI installs with bun. The payoff is install speed and running TypeScript sources directly, which is what lets the packages skip a build step entirely (below). An npm or pnpm shop can absolutely adopt these packages, but it is a real port, not a flag: regenerate the lockfile, rewrite the `--filter` / `--workspaces` script forms into the equivalent npm or pnpm syntax, and add the build step that bun makes unnecessary.
+
+**The provider registry is toggle-pluggable, not extend-pluggable.** `KNOWN_PROVIDERS` in `packages/auth/src/config.ts` is a fixed four-id union, and `ProviderId` derives from it. "Pluggable" in this repo means per-deployment enable/disable through `AUTH_PROVIDERS`, and that path really is config-only — it touches no flow code. Adding a *new* provider (GitHub, Microsoft, ...) is a code change in at least three places: the union in `config.ts`, the mount logic in `server.ts`, and each client's method list (`apps/web/components/auth/method-registry.tsx`, `apps/mobile/src/auth/methods.ts`). The closed union is what makes a typo in `AUTH_PROVIDERS` fail at boot and keeps every surface type-checked against one list; the cost is that nothing outside the package can register a provider.
+
+**Packages are private and export TypeScript source.** `@app/auth` and `@app/db` are `"private": true`, with `main` and `types` pointing straight at `src/index.ts`. There is no build, no `dist`, and nothing published to a registry. Inside the monorepo that is a feature — no build step sits between editing a package and running the app. Outside it, there is no consumable artifact: consuming these packages elsewhere means vendoring the source, depending on them by workspace-relative path, or adding the build-and-publish step that does not exist today.
+
+**The account-linking guarantee rests on Better Auth internals.** One verified email resolving to one user across Google and Apple depends on how Better Auth 1.7 links accounts inside `handleOAuthUserInfo` — behavior established by reading the dependency's source, not its documentation. The rationale is written out at the top of `packages/auth/src/server.ts` and above `accountLinkingConfig()` in the same file. Two things keep it honest: `packages/auth` pins `better-auth` to exactly `1.7.2` with no caret (the apps carry `^1.7.2` ranges, which resolve to that same version through the shared lockfile), and `oauth-integration.test.ts` pins the observable behavior rather than the implementation. So a version bump here is not routine — re-read those internals, and expect that suite to be what tells you if they moved.
+
+**No production mail provider ships.** `packages/auth/src/mailer.ts` is the whole integration point. The default console mailer prints reset and verification links to the server log and must never run in production — it would send nothing and write live tokens into your log stream. Wiring a real provider is yours; see [Password reset & email verification](#password-reset--email-verification).
+
+**Rate-limit counters are per process.** Better Auth's limiter defaults to in-memory storage and this repo configures no secondary store, so the budget is per instance rather than global. On a single instance that is exactly right; run four and the effective limit is roughly four times what you configured. Sharing counters means giving Better Auth a secondary storage backend — and that is the first point where infrastructure beyond Postgres would enter the picture.
 
 ## CI
 
