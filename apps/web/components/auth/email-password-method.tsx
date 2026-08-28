@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react"
 
 import { authClient } from "../../lib/auth-client"
+import { VERIFY_EMAIL_CALLBACK_URL } from "../../lib/verify-email-state"
 import type { AuthMethodProps } from "./method-registry"
 
 /**
@@ -35,7 +36,17 @@ function EmailPasswordSignupForm() {
     setStatus("submitting")
     setErrorMessage(null)
 
-    const { error } = await authClient.signUp.email({ name, email, password })
+    // `callbackURL` only matters where AUTH_REQUIRE_EMAIL_VERIFICATION is on —
+    // that is the only case where signup mails a verification link at all. It
+    // is passed unconditionally so the link lands on /verify-email whenever a
+    // deployment does turn verification on, rather than on Better Auth's bare
+    // default page.
+    const { error } = await authClient.signUp.email({
+      name,
+      email,
+      password,
+      callbackURL: VERIFY_EMAIL_CALLBACK_URL,
+    })
     if (error) {
       setStatus("error")
       setErrorMessage(error.message ?? "Could not create your account.")
@@ -147,6 +158,9 @@ function EmailPasswordLoginForm() {
         {status === "submitting" ? "Logging in\u2026" : "Log in"}
       </button>
       {status === "error" && <p role="alert">{GENERIC_LOGIN_ERROR}</p>}
+      <p>
+        <a href="/forgot-password">Forgot your password?</a>
+      </p>
     </form>
   )
 }
