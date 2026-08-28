@@ -168,6 +168,32 @@ make them work.
 - **Verification** — `GET /api/auth/verify-email?token=...` marks the address
   proven. `POST /api/auth/send-verification-email` re-sends on demand.
 
+### The user-facing flows (web + mobile)
+
+The pages above the API: what a person actually clicks, in `apps/web` and
+`apps/mobile`, all driven by the same `AUTH_PROVIDERS` registry as the server.
+
+- **Requesting a reset** — `/forgot-password` (web) or the "Forgot password?"
+  button on the mobile sign-in screen (which opens that page in the system
+  browser, the same hop-out social sign-in uses). Whatever address is
+  submitted, the confirmation copy is identical — an unknown address mails
+  nobody and says nothing, so the form cannot be used to learn who has an
+  account.
+- **Choosing a new password** — the mailed link lands on `/reset-password`,
+  which reads the token from the URL, validates the new password and its
+  confirmation locally (minimum length, match) before spending the single-use
+  token, and on success points back to the log-in page. An expired, spent, or
+  missing token shows an expired-link notice with a way to request a fresh
+  one — never a form that can only fail.
+- **Verifying an address** — with `AUTH_REQUIRE_EMAIL_VERIFICATION` on, the
+  mailed link lands on `/verify-email`, which shows verifying / verified /
+  expired-or-invalid states and a resend action. The resend answers with the
+  same generic confirmation whether or not the address has an account.
+
+On a deployment without `email-password`, all three pages say so instead of
+rendering forms the server would refuse — the same methods-driven contract the
+login and signup panels follow.
+
 ### `AUTH_REQUIRE_EMAIL_VERIFICATION`
 
 Off by default, which preserves existing behavior exactly: no verification

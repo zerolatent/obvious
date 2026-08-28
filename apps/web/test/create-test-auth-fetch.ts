@@ -1,4 +1,4 @@
-import { createAuth, authMethodsResponse, type AuthEnv } from "@app/auth"
+import { createAuth, authMethodsResponse, type AuthEnv, type OutgoingMail } from "@app/auth"
 import { memoryAdapter } from "better-auth/adapters/memory"
 
 /**
@@ -12,9 +12,33 @@ const CREDENTIALS: AuthEnv = {
   BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
 }
 
-function buildTestAuth(providers: string) {
+export type SentMail = OutgoingMail[]
+
+export interface TestAuthOptions {
+  /**
+   * Turns on AUTH_REQUIRE_EMAIL_VERIFICATION. Off by default so existing
+   * suites keep the behavior they were written against: no verification mail
+   * at signup, and unverified users sign in normally.
+   */
+  requireEmailVerification?: boolean
+}
+
+function buildTestAuth(providers: string, options: TestAuthOptions, sent: OutgoingMail[]) {
   return createAuth({
-    env: { ...CREDENTIALS, AUTH_PROVIDERS: providers },
+    env: {
+      ...CREDENTIALS,
+      AUTH_PROVIDERS: providers,
+      ...(options.requireEmailVerification && { AUTH_REQUIRE_EMAIL_VERIFICATION: "true" }),
+    },
+    // Stands in for the deployment's mail provider. Recording the messages
+    // rather than printing them is what lets a test read the link a user
+    // would have clicked, so the reset round-trip runs on a real token from a
+    // real mail body instead of one the test minted for itself.
+    mailer: {
+      sendMail: async (mail) => {
+        sent.push(mail)
+      },
+    },
     database: memoryAdapter({ user: [], session: [], account: [], verification: [], passkey: [] }),
     // Better Auth skips origin validation whenever NODE_ENV=test, which would
     // let every flow in this file pass even if the Origin header below were
@@ -66,8 +90,9 @@ function applySetCookies(jar: Map<string, string>, setCookie: string[]): void {
  * session cookie, so overwriting the jar on that response would silently
  * drop the session and turn the next request unauthenticated.
  */
-export function createTestAuthFetch(providers: string) {
-  const { auth, registry } = buildTestAuth(providers)
+export function createTestAuthFetch(providers: string, options: TestAuthOptions = {}) {
+  const sentMail: OutgoingMail[] = []
+  const { auth, registry } = buildTestAuth(providers, options, sentMail)
   const cookieJar = new Map<string, string>()
 
   const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -106,5 +131,19 @@ export function createTestAuthFetch(providers: string) {
     return response
   }
 
-  return { fetch: fetchImpl, auth, registry }
+  return { fetch: fetchImpl, auth, registry, sentMail }
+}
+
+/**
+ * The first URL in a mail body — the link the recipient would click.
+ *
+ * Reset and verification mails are built by `passwordResetMail` /
+ * `emailVerificationMail`, which put the action URL in both the text and HTML
+ * parts; the text part is the one with nothing else in it that looks like a
+ * link.
+ */
+export function actionUrlFrom(mail: OutgoingMail): string {
+  const match = /https?:\/\/\S+/.exec(mail.text)
+  if (!match) throw new Error(`No action URL found in mail to ${mail.to}: ${mail.text}`)
+  return match[0]
 }

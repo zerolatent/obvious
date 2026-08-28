@@ -1,7 +1,10 @@
+import { Linking } from "react-native"
+
 import { authClient } from "./client"
 import type { EmailPasswordActions } from "./emailPassword"
+import type { ForgotPasswordPorts } from "./forgotPassword"
 import type { SocialSignInPorts } from "./socialSignIn"
-import { APP_SCHEME } from "./config"
+import { APP_SCHEME, AUTH_BASE_URL } from "./config"
 
 /**
  * The only place the concrete auth client meets the flow logic. Everything
@@ -18,4 +21,9 @@ export const emailPasswordActions: EmailPasswordActions = {
 export const socialSignInPorts: SocialSignInPorts = {
   scheme: APP_SCHEME,
   signInSocial: (input) => authClient.signIn.social(input),
+}
+
+export const forgotPasswordPorts: ForgotPasswordPorts = {
+  authBaseURL: AUTH_BASE_URL,
+  openURL: (url) => Linking.openURL(url),
 }

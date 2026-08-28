@@ -2,8 +2,9 @@ import type { ProviderId } from "@app/auth"
 import { useState } from "react"
 
 import { Body, Button, Field, Notice, Screen, Title } from "../ui/primitives"
-import { emailPasswordActions, socialSignInPorts } from "./actions"
+import { emailPasswordActions, forgotPasswordPorts, socialSignInPorts } from "./actions"
 import { signInWithEmail, signUpWithEmail } from "./emailPassword"
+import { openForgotPassword } from "./forgotPassword"
 import { isSocialProvider, signInWithSocialProvider, type SocialProviderId } from "./socialSignIn"
 
 type Mode = "sign-in" | "sign-up"
@@ -69,6 +70,17 @@ export function SignInScreen({ methods }: { methods: ProviderId[] }) {
       .finally(() => setBusy(false))
   }
 
+  const runForgotPasswordFlow = () => {
+    setError(null)
+    setInfo(null)
+
+    void openForgotPassword(forgotPasswordPorts).then((outcome) => {
+      // The reset itself happens in the browser and in the user's mailbox;
+      // this screen only reports whether the hop out of the app worked.
+      if (outcome.status === "error") setError(outcome.message)
+    })
+  }
+
   return (
     <Screen>
       <Title>Obvious Auth</Title>
@@ -119,6 +131,14 @@ export function SignInScreen({ methods }: { methods: ProviderId[] }) {
             }}
             disabled={busy}
           />
+          {mode === "sign-in" && (
+            <Button
+              variant="secondary"
+              label="Forgot password?"
+              onPress={runForgotPasswordFlow}
+              disabled={busy}
+            />
+          )}
         </>
       )}
 
